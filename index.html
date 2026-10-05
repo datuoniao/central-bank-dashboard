@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>G4 央行资产负债表 · M2 · 大宗商品 联动看板</title>
+  <meta name="description" content="中美欧日四大央行资产负债表、M2 与大宗商品价格（黄金/铜/原油）月度对照看板，数据自动更新。">
+  <link rel="stylesheet" href="assets/style.css">
+  <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
+</head>
+<body>
+
+<header>
+  <div class="hd-inner">
+    <div class="brand">
+      <span class="dot"></span>
+      G4 央行资产负债表 · M2 · 大宗商品
+      <small>月度联动看板</small>
+    </div>
+    <div class="spacer"></div>
+    <div class="meta-chips">
+      <span class="chip">资产截止 <b id="latest-balance">—</b></span>
+      <span class="chip">M2 截止 <b id="latest-m2">—</b></span>
+      <span class="chip">价格截止 <b id="latest-price">—</b></span>
+      <span class="chip">单位 <b id="unit-note">—</b></span>
+      <span class="chip">更新于 <b id="gen-time">—</b></span>
+    </div>
+    <button class="icon-btn" id="theme-btn" title="切换深浅色">☾</button>
+  </div>
+</header>
+
+<main>
+  <div id="loading" class="loading">正在加载数据…</div>
+
+  <div class="section-title">最新读数</div>
+  <div class="kpis" id="kpis"></div>
+
+  <div class="section-title">一、央行资产负债表</div>
+  <div class="grid one">
+    <div class="card">
+      <div class="card-head">
+        <h3>G4 央行总资产合计</h3>
+        <span class="hint">单位：亿美元 · 全球流动性总闸门</span>
+      </div>
+      <div class="chart tall" id="c-g4assets"></div>
+    </div>
+  </div>
+
+  <div class="grid">
+    <div class="card">
+      <div class="card-head">
+        <h3>四国央行总资产</h3>
+        <span class="hint">单位：亿美元 · 分国对比</span>
+      </div>
+      <div class="chart" id="c-countries"></div>
+    </div>
+    <div class="card">
+      <div class="card-head">
+        <h3>央行总资产 · 同比增速</h3>
+        <span class="hint">扩表/缩表节奏</span>
+      </div>
+      <div class="chart" id="c-g4yoy"></div>
+    </div>
+    <div class="card">
+      <div class="card-head">
+        <h3>四国央行资产 · 结构占比</h3>
+        <span class="hint">谁在主导全球流动性</span>
+      </div>
+      <div class="chart" id="c-structure"></div>
+    </div>
+    <div class="card">
+      <div class="card-head">
+        <h3>美 / 欧 / 日 央行总资产</h3>
+        <span class="hint">2005 年至今</span>
+      </div>
+      <div class="chart" id="c-others"></div>
+    </div>
+    <div class="card">
+      <div class="card-head">
+        <h3>相关性：G4 扩表 ↔ 商品</h3>
+        <span class="hint">同比序列皮尔逊系数</span>
+      </div>
+      <div class="chart short" style="height:auto" id="corr-box"></div>
+    </div>
+  </div>
+
+  <div class="section-title">二、广义货币 M2</div>
+  <div class="grid">
+    <div class="card">
+      <div class="card-head">
+        <h3>G4 M2 合计 + 同比</h3>
+        <span class="hint">单位：亿美元 · 右轴同比</span>
+      </div>
+      <div class="chart" id="c-m2total"></div>
+    </div>
+    <div class="card">
+      <div class="card-head">
+        <h3>四经济体 M2 分列</h3>
+        <span class="hint">折算美元</span>
+      </div>
+      <div class="chart" id="c-m2g"></div>
+    </div>
+  </div>
+
+  <div class="section-title">三、大宗商品</div>
+  <div class="grid">
+    <div class="card">
+      <div class="card-head">
+        <h3>商品价格指数（起点=100）</h3>
+        <span class="hint">Brent / 黄金 / 铜</span>
+      </div>
+      <div class="chart" id="c-prices"></div>
+    </div>
+    <div class="card">
+      <div class="card-head">
+        <h3>黄金 vs G4 央行扩表</h3>
+        <span class="hint">同比对照，双轴</span>
+      </div>
+      <div class="chart" id="c-gold"></div>
+    </div>
+    <div class="card">
+      <div class="card-head">
+        <h3>铜 vs 中国央行扩表</h3>
+        <span class="hint">同比对照，双轴</span>
+      </div>
+      <div class="chart" id="c-copper"></div>
+    </div>
+    <div class="card">
+      <div class="card-head">
+        <h3>口径说明</h3>
+      </div>
+      <div style="font-size:13px;color:var(--text-2);line-height:1.9;padding:8px 2px 16px">
+        <p style="margin:0 0 10px"><b>资产负债表</b>（亿美元 / 100 million USD）：</p>
+        <ul style="margin:0 0 12px;padding-left:20px">
+          <li>中国：<code>总资产(亿元) ÷ USDCNY</code></li>
+          <li>美国：<code>总资产(百万美元) ÷ 100</code></li>
+          <li>欧元区：<code>总资产(百万欧元) × EURUSD ÷ 100</code></li>
+          <li>日本：<code>总资产(日元) ÷ USDJPY ÷ 1e8</code></li>
+          <li>G4 合计 = 四国简单加总</li>
+        </ul>
+        <p style="margin:0 0 10px"><b>M2</b>：中国 <code>亿元÷USDCNY</code>；美国 <code>十亿美元×10</code>；欧元区 <code>百万欧元×EURUSD÷100</code>；日本 <code>亿日元÷USDJPY</code>。</p>
+        <p style="margin:0"><b>数据源</b>：中国人民银行 · FRED · ECB · World Bank Pink Sheet。汇率取当月均值。</p>
+      </div>
+    </div>
+  </div>
+</main>
+
+<footer>
+  <div><b>数据来源</b>：中国人民银行（货币当局资产负债表 / 货币供应量）· FRED（WALCL · M2SL · ECBASSETSW · JPNASSETS · DEX*）· World Bank Pink Sheet（Brent / Gold / Copper）。</div>
+  <div style="margin-top:6px">本看板由 GitHub Actions 每月自动抓取并重建；历史底座来自原 Excel《货币与商品价格对照.xlsx》（Wind 导出，2003 年起）。仅供研究参考，不构成投资建议。</div>
+</footer>
+
+<script src="assets/app.js"></script>
+</body>
+</html>

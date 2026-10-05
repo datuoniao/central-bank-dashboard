@@ -1,0 +1,79 @@
+name: Update G4 Dashboard Data
+
+# 每月 5 日 09:00 UTC（北京时间 17:00）自动抓取并重建看板数据。
+# 各国央行/FRED 数据通常在上旬陆续发布，选 5 日可覆盖绝大多数最新值。
+on:
+  schedule:
+    - cron: "0 9 5 * *"
+  workflow_dispatch: {}   # 支持手动触发（用于补抓 / 排障）
+
+# 允许 Action 把更新后的 data/*.json 提交回仓库
+permissions:
+  contents: write
+
+concurrency:
+  group: dashboard-update
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Fetch public data sources
+        run: python scripts/fetch_all.py
+        continue-on-error: false
+
+      - name: Transform & merge
+        run: python scripts/transform.py
+
+      - name: Show data summary
+        run: |
+          python - <<'PY'
+          import json
+          d = json.load(open("data/dashboard.json", encoding="utf-8"))
+          m = d["meta"]
+          print("generated_at :", m["generated_at"])
+          print("latest_balance:", m["latest_balance"])
+          print("latest_m2     :", m["latest_m2"])
+          print("latest_price  :", m["latest_price"])
+          for k, v in d["correlations"].items():
+              print(f"  corr {k}: {v}")
+          PY
+
+      - name: Commit & push if changed
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/raw_latest.json data/dashboard.json
+          if git diff --cached --quiet; then
+            echo "无数据变化，跳过提交"
+          else
+            git commit -m "chore(data): 月度自动更新 $(date -u +%Y-%m-%d)"
+            git push
+          fi
+
+      # 若仓库启用了 GitHub Pages (source = Actions)，可取消下面注释直接部署
+      # - name: Setup Pages
+      #   uses: actions/configure-pages@v5
+      # - name: Upload artifact
+      #   uses: actions/upload-pages-artifact@v3
+      #   with:
+      #     path: "."
+      # - name: Deploy to GitHub Pages
+      #   uses: actions/deploy-pages@v4

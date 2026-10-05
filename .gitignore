@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+.preview*
+_preview*.png
+.DS_Store
+Thumbs.db
+.venv/
+venv/

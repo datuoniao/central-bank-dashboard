@@ -1,0 +1,5 @@
+# 抓取脚本依赖
+# - openpyxl: 读写 .xlsx（PBOC 新版附件、World Bank Pink Sheet）
+# - xlrd:     读取 .xls（PBOC 2015-2022 旧版附件，BIFF 格式）
+openpyxl>=3.1.5
+xlrd>=2.0.2
