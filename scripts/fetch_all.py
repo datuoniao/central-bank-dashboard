@@ -53,47 +53,54 @@ def main():
     out = {"fetched_at": datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")}
     errors = []
 
+    # ---------- 一次性并发抓取全部 FRED 序列（境外 runner 提速 & 抗超时）----------
+    FRED_IDS = ["DEXCHUS", "DEXJPUS", "DEXUSEU", "WALCL", "M2SL", "ECBASSETSW", JP_SERIES]
+    fred_res, fred_fail = fred.fetch_many(FRED_IDS)
+    for sid, msg in fred_fail.items():
+        log(f"FRED {sid} 抓取失败（将沿用历史底座）: {msg}")
+    log(f"FRED 并发抓取：成功 {len(fred_res)}/{len(FRED_IDS)}")
+
     # ---------- 汇率（FRED）----------
     fx = out.setdefault("fx", {})
-    try:
-        usdcny = fred.monthly_avg(fred.fetch_series("DEXCHUS"))
+    if "DEXCHUS" in fred_res:
+        usdcny = fred.monthly_avg(fred_res["DEXCHUS"])
         fx["usdcny"] = {m: round(v, 6) for m, v in usdcny.items()}
         log(f"USDCNY {len(usdcny)} months, last={max(usdcny)} {usdcny[max(usdcny)]:.4f}")
-    except Exception as e:  # noqa: BLE001
-        errors.append(f"DEXCHUS: {e}")
+    else:
+        errors.append(f"DEXCHUS: {fred_fail.get('DEXCHUS')}")
 
-    try:
-        usdjpy = fred.monthly_avg(fred.fetch_series("DEXJPUS"))
+    if "DEXJPUS" in fred_res:
+        usdjpy = fred.monthly_avg(fred_res["DEXJPUS"])
         fx["usdjpy"] = {m: round(v, 6) for m, v in usdjpy.items()}
         log(f"USDJPY {len(usdjpy)} months, last={max(usdjpy)} {usdjpy[max(usdjpy)]:.4f}")
-    except Exception as e:  # noqa: BLE001
-        errors.append(f"DEXJPUS: {e}")
+    else:
+        errors.append(f"DEXJPUS: {fred_fail.get('DEXJPUS')}")
 
-    try:
+    if "DEXUSEU" in fred_res:
         # DEXUSEU = 美元/欧元 (USD per EUR)，即 EURUSD 直接值
-        eurusd = fred.monthly_avg(fred.fetch_series("DEXUSEU"))
+        eurusd = fred.monthly_avg(fred_res["DEXUSEU"])
         fx["eurusd"] = {m: round(v, 6) for m, v in eurusd.items()}
         log(f"EURUSD {len(eurusd)} months, last={max(eurusd)} {eurusd[max(eurusd)]:.4f}")
-    except Exception as e:  # noqa: BLE001
-        errors.append(f"DEXUSEU: {e}")
+    else:
+        errors.append(f"DEXUSEU: {fred_fail.get('DEXUSEU')}")
 
     # ---------- 美国 ----------
     out["us"] = {"levels": {}}
-    try:
-        walcl = fred.to_month_end(fred.fetch_series("WALCL"))  # 百万美元
+    if "WALCL" in fred_res:
+        walcl = fred.to_month_end(fred_res["WALCL"])  # 百万美元
         out["us"]["levels"] = {m: round(v, 3) for m, v in walcl.items()}
         log(f"US WALCL {len(walcl)} months, last={max(walcl)} {walcl[max(walcl)]:.0f}")
-    except Exception as e:  # noqa: BLE001
-        errors.append(f"WALCL: {e}")
+    else:
+        errors.append(f"WALCL: {fred_fail.get('WALCL')}")
 
     out.setdefault("m2", {})
     out["m2"]["us"] = {"levels": {}}
-    try:
-        m2sl = fred.to_month_end(fred.fetch_series("M2SL"))   # 十亿美元
+    if "M2SL" in fred_res:
+        m2sl = fred.to_month_end(fred_res["M2SL"])   # 十亿美元
         out["m2"]["us"]["levels"] = {m: round(v, 2) for m, v in m2sl.items()}
         log(f"US M2SL {len(m2sl)} months, last={max(m2sl)} {m2sl[max(m2sl)]:.1f}")
-    except Exception as e:  # noqa: BLE001
-        errors.append(f"M2SL: {e}")
+    else:
+        errors.append(f"M2SL: {fred_fail.get('M2SL')}")
 
     # ---------- 欧元区 M2（ECB）----------
     out["m2"]["ea"] = {"levels": {}}
@@ -110,12 +117,12 @@ def main():
     # 欧元区央行资产：FRED ECBASSETSW（百万欧元，周末值 → 取月末），
     # 实测与 Excel 的欧元区列完全一致（2026-08 = 5915343）。
     out["ea"] = {"levels": {}}
-    try:
-        ea_assets = fred.to_month_end(fred.fetch_series("ECBASSETSW"))
+    if "ECBASSETSW" in fred_res:
+        ea_assets = fred.to_month_end(fred_res["ECBASSETSW"])
         out["ea"]["levels"] = {m: round(v, 2) for m, v in ea_assets.items()}
         log(f"EA assets {len(ea_assets)} months, last={max(ea_assets)} {ea_assets[max(ea_assets)]:.0f}")
-    except Exception as e:  # noqa: BLE001
-        errors.append(f"ECBASSETSW: {e}")
+    else:
+        errors.append(f"ECBASSETSW: {fred_fail.get('ECBASSETSW')}")
 
     # ---------- 中国（PBOC）----------
     out["cn"] = {"levels": {}}
@@ -137,10 +144,13 @@ def main():
     out["jp"] = {"levels": {}}
     out["m2"]["jp"] = {"levels": {}}
     try:
-        jp_assets = fred.to_month_end(fred.fetch_series(JP_SERIES))  # 亿日元
-        # normalize_balance 期望「日元」→ ×1e8
-        out["jp"]["levels"] = {m: round(v * 1e8, 0) for m, v in jp_assets.items()}
-        log(f"JP assets {len(jp_assets)} months, last={max(jp_assets)} {jp_assets[max(jp_assets)]:.0f} 亿日元")
+        if JP_SERIES in fred_res:
+            jp_assets = fred.to_month_end(fred_res[JP_SERIES])  # 亿日元
+            # normalize_balance 期望「日元」→ ×1e8
+            out["jp"]["levels"] = {m: round(v * 1e8, 0) for m, v in jp_assets.items()}
+            log(f"JP assets {len(jp_assets)} months, last={max(jp_assets)} {jp_assets[max(jp_assets)]:.0f} 亿日元")
+        else:
+            log(f"JP assets 跳过（沿用历史底座）: {fred_fail.get(JP_SERIES, '未取到')}")
     except Exception as e:  # noqa: BLE001
         log(f"JP assets 跳过（沿用历史底座）: {type(e).__name__}")
     # 日本 M2：Excel 底座已有；FRED 无干净月频长序列，保持留空由底座覆盖
@@ -160,10 +170,27 @@ def main():
     op = os.path.join(DATA, "raw_latest.json")
     with open(op, "w", encoding="utf-8") as f:
         json.dump(out, f, ensure_ascii=False, separators=(",", ":"))
-    log(f"written {op} ({os.path.getsize(op)} bytes)")
+
+    # 关键：部分源失败时仍然写出 raw_latest.json，让 transform 用「历史底座 + 本次能取到的数据」
+    # 合并降级，而不是让整个工作流失败。
+    # 只有当「所有源都拿不到任何数据」时才判定为致命错误（exit 2）。
+    total_points = (
+        len(out.get("fx", {}))
+        + (1 if out.get("us", {}).get("levels") else 0)
+        + (1 if out.get("ea", {}).get("levels") else 0)
+        + (1 if out.get("cn", {}).get("levels") else 0)
+        + (1 if out.get("m2", {}).get("us", {}).get("levels") else 0)
+        + (1 if out.get("m2", {}).get("ea", {}).get("levels") else 0)
+        + (1 if out.get("m2", {}).get("cn", {}).get("levels") else 0)
+        + (1 if out.get("prices", {}).get("gold") else 0)
+    )
+    log(f"written {op} ({os.path.getsize(op)} bytes)  有效数据块={total_points}")
     if errors:
-        log("部分源失败：" + "; ".join(errors))
-    return 0 if not errors else 2
+        log("部分源失败（已降级为警告，沿用历史底座）：" + "; ".join(errors))
+    if total_points == 0:
+        log("致命：所有数据源均未取到任何数据")
+        return 2
+    return 0
 
 
 if __name__ == "__main__":

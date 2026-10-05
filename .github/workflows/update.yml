@@ -38,6 +38,11 @@ jobs:
       - name: Fetch public data sources
         run: python scripts/fetch_all.py
         continue-on-error: false
+        env:
+          # 境外 runner 访问 FRED / PBOC 有偶发超时：放宽超时与重试次数
+          FRED_TIMEOUT: "90"
+          FRED_RETRIES: "6"
+          PYTHONUNBUFFERED: "1"
 
       - name: Transform & merge
         run: python scripts/transform.py
