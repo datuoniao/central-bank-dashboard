@@ -6,7 +6,45 @@
   <title>G4 央行资产负债表 · M2 · 大宗商品 联动看板</title>
   <meta name="description" content="中美欧日四大央行资产负债表、M2 与大宗商品价格（黄金/铜/原油）月度对照看板，数据自动更新。">
   <link rel="stylesheet" href="assets/style.css">
-  <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
+  <!--
+    ECharts 加载策略（按序兜底，任一成功即止）：
+      1) 本地内置 assets/vendor/echarts.min.js —— 最稳，不依赖外网
+      2) 多个公共 CDN —— 仅在本地文件缺失/损坏时回退
+    加载完成后触发 window.__echartsReady，app.js 会等待该事件再渲染。
+  -->
+  <script>
+  (function () {
+    var SOURCES = [
+      "assets/vendor/echarts.min.js",
+      "https://cdn.bootcdn.net/ajax/libs/echarts/5.5.0/echarts.min.js",
+      "https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js",
+      "https://unpkg.com/echarts@5.5.0/dist/echarts.min.js",
+      "https://cdnjs.cloudflare.com/ajax/libs/echarts/5.5.0/echarts.min.js"
+    ];
+    var i = 0;
+    function tryNext() {
+      if (i >= SOURCES.length) {
+        window.__echartsError = "ECharts 加载失败（本地与全部 CDN 均不可用）";
+        window.dispatchEvent(new Event("echarts-ready"));
+        return;
+      }
+      var s = document.createElement("script");
+      s.src = SOURCES[i++];
+      s.async = false;
+      s.onload = function () {
+        if (window.echarts) {
+          window.__echartsOK = true;
+          window.dispatchEvent(new Event("echarts-ready"));
+        } else {
+          tryNext();
+        }
+      };
+      s.onerror = tryNext;
+      document.head.appendChild(s);
+    }
+    tryNext();
+  })();
+  </script>
 </head>
 <body>
 
@@ -124,6 +162,29 @@
         <span class="hint">同比对照，双轴</span>
       </div>
       <div class="chart" id="c-copper"></div>
+    </div>
+
+    <div class="card span2">
+      <div class="card-head">
+        <h3>自由对照：商品 × 央行</h3>
+        <span class="hint">任选商品与央行，查看同比联动</span>
+      </div>
+      <div class="picker">
+        <span class="picker-label">商品</span>
+        <div class="seg" id="pk-price"></div>
+        <span class="picker-label">央行</span>
+        <div class="seg" id="pk-bal"></div>
+      </div>
+      <div class="pair-badge" id="pk-corr">—</div>
+      <div class="chart" id="c-pairfree"></div>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <h3>全部商品 × 央行 相关系数总览</h3>
+        <span class="hint">同比序列皮尔逊系数 · 点击单元格切换上方图表</span>
+      </div>
+      <div id="corr-matrix" class="corr-matrix"></div>
     </div>
     <div class="card">
       <div class="card-head">

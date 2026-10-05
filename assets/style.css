@@ -203,6 +203,42 @@ main { max-width: 1440px; margin: 0 auto; padding: 22px 24px 64px; }
 .chart.tall { height: 400px; }
 .chart.short { height: 250px; }
 
+/* 跨两列的大卡（自由对照 / 相关系数矩阵） */
+.card.span2 { grid-column: 1 / -1; }
+@media (max-width: 980px) { .card.span2 { grid-column: auto; } }
+
+/* 自由对照选择器 */
+.picker {
+  display: flex; align-items: center; gap: 10px;
+  flex-wrap: wrap; margin: 6px 0 2px;
+}
+.picker-label {
+  font-size: 12px; color: var(--text-3); font-weight: 600;
+  letter-spacing: .04em;
+}
+.pair-badge {
+  font-size: 12.5px; color: var(--text-2);
+  padding: 5px 2px 0; font-variant-numeric: tabular-nums;
+}
+.pair-badge b { font-weight: 700; }
+
+/* 相关系数矩阵 */
+.corr-matrix { overflow-x: auto; padding: 4px 2px 14px; }
+.corr-matrix table { border-collapse: separate; border-spacing: 4px; width: 100%; }
+.corr-matrix th {
+  font-size: 11.5px; color: var(--text-3); font-weight: 600;
+  padding: 4px 6px; text-align: center; white-space: nowrap;
+}
+.corr-matrix th.rowh { text-align: left; padding-left: 2px; }
+.corr-matrix td {
+  text-align: center; padding: 8px 6px; border-radius: 7px;
+  font-size: 12.5px; font-variant-numeric: tabular-nums; font-weight: 600;
+  cursor: pointer; transition: .15s; border: 1px solid transparent;
+}
+.corr-matrix td:hover { border-color: var(--accent); filter: brightness(1.08); }
+.corr-matrix td.na { color: var(--text-3); cursor: default; background: var(--panel-2); }
+.corr-matrix td.on { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
+
 /* 相关性小表 */
 .corr-table { width: 100%; border-collapse: collapse; font-size: 13px; }
 .corr-table th, .corr-table td {

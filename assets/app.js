@@ -1,17 +1,21 @@
 /* ============================================================
    G4 央行资产负债表 · M2 · 大宗商品 联动看板 — 前端渲染
-   依赖：ECharts 5（CDN）；数据：../data/dashboard.json
-   精选核心图组：
-     1. G4 央行总资产（合计 + 四国分列）
-     2. G4 央行总资产 · 同比
-     3. 央行总资产结构占比（堆叠面积）
-     4. 美/欧/日 央行总资产（分国小图）
-     5. G4 M2 总量 + 同比
-     6. 四经济体 M2 分列
-     7. 大宗商品：Brent / 黄金 / 铜（归一化指数）
-     8. 黄金 vs G4 央行资产同比（双轴对照）
-     9. 铜 vs 中国央行资产同比
-    10. 相关性矩阵（G4 扩表 ↔ 商品）
+   依赖：ECharts 5（本地内置 assets/vendor/ + 多 CDN 兜底）
+   数据：data/dashboard.json
+   图表清单：
+     1. G4 央行总资产（合计）
+     2. 四国央行总资产（分国对比）
+     3. 央行总资产 · 同比
+     4. 央行总资产结构占比（堆叠面积）
+     5. 美/欧/日 央行总资产（分国小图）
+     6. G4 M2 总量 + 同比
+     7. 四经济体 M2 分列
+     8. 大宗商品：Brent / 黄金 / 铜（归一化指数）
+     9. 黄金 vs G4 央行资产同比（双轴对照）
+    10. 铜 vs 中国央行资产同比
+    11. 自由对照：商品 × 央行（可交互切换，支持 URL 深链）
+    12. 全部商品 × 央行 相关系数矩阵（可点击切换）
+    13. 相关性简表
    ============================================================ */
 (function () {
   "use strict";
@@ -21,6 +25,11 @@
   var PCOLOR = { brent: "#2c3e50", gold: "#d4a017", copper: "#b06a3b" };
   var PNAME = { brent: "Brent 原油", gold: "黄金", copper: "铜" };
   var FNAME = { usdcny: "USD/CNY", usdjpy: "USD/JPY", eurusd: "EUR/USD" };
+
+  // 自由对照可选维度（商品 × 央行）
+  var PRICE_KEYS = ["gold", "copper", "brent"];
+  var BAL_KEYS = ["g4", "cn", "us", "ea", "jp"];
+  var FREE = { price: "gold", bal: "g4" };   // 自由对照当前选择
 
   var DATA = null;
   var charts = [];
@@ -318,8 +327,15 @@
   }
 
   // 8/9. 双轴对照：某国央行资产同比 vs 商品同比
+  //      返回该对照的皮尔逊相关系数（基于对齐后的同比序列）
   function chartPair(domId, balKey, priceKey) {
     var b = DATA.balance, p = DATA.prices;
+    var dom = document.getElementById(domId);
+    if (!dom) return null;
+    if (!p[priceKey] || !(b[balKey] || b.g4)) {
+      dom.innerHTML = '<div style="padding:40px;text-align:center;color:var(--text-3)">该组合暂无数据</div>';
+      return null;
+    }
     // 合并两者月份轴，避免因天数不同错位（价格通常比央行资产多 1 个月）
     var axis = [];
     months(b[balKey] || b.g4).forEach(function (m) { if (axis.indexOf(m) < 0) axis.push(m); });
@@ -341,13 +357,205 @@
       series.forEach(function (r) { map[r.m] = r.yoy; });
       return axis.map(function (m) { return map.hasOwnProperty(m) ? map[m] : null; });
     }
+    var a1 = alignYoY(b[balKey] || b.g4);
+    var a2 = alignYoY(p[priceKey]);
     opt.series = [
-      { name: GNAME[balKey] + " 资产同比", type: "line", data: alignYoY(b[balKey] || b.g4),
+      { name: GNAME[balKey] + " 资产同比", type: "line", data: a1,
         smooth: true, symbol: "none", lineStyle: { width: 2.2, color: GCOLOR[balKey] } },
-      { name: PNAME[priceKey] + " 同比", type: "line", yAxisIndex: 1, data: alignYoY(p[priceKey]),
+      { name: PNAME[priceKey] + " 同比", type: "line", yAxisIndex: 1, data: a2,
         smooth: true, symbol: "none", lineStyle: { width: 2.2, color: PCOLOR[priceKey] } }
     ];
-    mk(document.getElementById(domId), opt);
+    mk(dom, opt);
+    return pearson(a1, a2);
+  }
+
+  // 皮尔逊相关系数（跳过任一侧为 null 的月份）
+  function pearson(xs, ys) {
+    var n = 0, sx = 0, sy = 0, sxx = 0, syy = 0, sxy = 0;
+    for (var i = 0; i < xs.length; i++) {
+      var x = xs[i], y = ys[i];
+      if (x == null || y == null || isNaN(x) || isNaN(y)) continue;
+      n++; sx += x; sy += y; sxx += x * x; syy += y * y; sxy += x * y;
+    }
+    if (n < 3) return null;
+    var num = n * sxy - sx * sy;
+    var den = Math.sqrt((n * sxx - sx * sx) * (n * syy - sy * sy));
+    return den === 0 ? null : num / den;
+  }
+
+  // 11. 自由对照：商品 × 央行（可交互切换）
+  function chartFree() {
+    var r = chartPair("c-pairfree", FREE.bal, FREE.price);
+    var box = document.getElementById("pk-corr");
+    if (box) {
+      if (r == null) {
+        box.innerHTML = "—";
+      } else {
+        var abs = Math.abs(r);
+        var strength = abs >= .6 ? "强" : abs >= .3 ? "中等" : abs >= .15 ? "弱" : "几乎无";
+        var dir = r >= 0 ? "正相关" : "负相关";
+        box.innerHTML = "同比相关系数 r = <b class='" + cls(r) + "'>" + r.toFixed(3) +
+          "</b>（" + strength + dir + "）· " + PNAME[FREE.price] + " × " + GNAME[FREE.bal];
+      }
+    }
+    // 高亮矩阵中对应单元格
+    var cells = document.querySelectorAll("#corr-matrix td");
+    cells.forEach(function (td) {
+      td.classList.toggle("on", td.dataset.price === FREE.price && td.dataset.bal === FREE.bal);
+    });
+    writeHash();
+  }
+
+  // 12. 全部商品 × 央行 相关系数矩阵（可点击切换）
+  function renderCorrMatrix() {
+    var box = document.getElementById("corr-matrix");
+    if (!box) return;
+    var b = DATA.balance, p = DATA.prices;
+    // 预取各序列的同比 map
+    function yoyMap(series) {
+      var m = {};
+      if (series) series.forEach(function (r) { m[r.m] = r.yoy; });
+      return m;
+    }
+    var balYo = {}; BAL_KEYS.forEach(function (k) { balYo[k] = yoyMap(b[k]); });
+    var priYo = {}; PRICE_KEYS.forEach(function (k) { priYo[k] = yoyMap(p[k]); });
+
+    function corrOf(bk, pk) {
+      var bm = balYo[bk], pm = priYo[pk];
+      // 取并集月份，逐月取同比
+      var axis = Object.keys(bm);
+      Object.keys(pm).forEach(function (m) { if (axis.indexOf(m) < 0) axis.push(m); });
+      var xs = [], ys = [];
+      axis.forEach(function (m) {
+        var x = bm[m], y = pm[m];
+        if (x == null || y == null) return;
+        xs.push(x); ys.push(y);
+      });
+      return pearson(xs, ys);
+    }
+
+    var html = '<table><thead><tr><th class="rowh">央行 \\ 商品</th>';
+    PRICE_KEYS.forEach(function (pk) {
+      html += '<th><span style="display:inline-block;width:8px;height:8px;border-radius:2px;background:' +
+        PCOLOR[pk] + ';margin-right:5px"></span>' + PNAME[pk] + '</th>';
+    });
+    html += "</tr></thead><tbody>";
+    BAL_KEYS.forEach(function (bk) {
+      html += '<tr><th class="rowh"><span style="display:inline-block;width:8px;height:8px;border-radius:2px;background:' +
+        GCOLOR[bk] + ';margin-right:5px"></span>' + GNAME[bk] + '</th>';
+      PRICE_KEYS.forEach(function (pk) {
+        var r = corrOf(bk, pk);
+        if (r == null) {
+          html += '<td class="na" data-bal="' + bk + '" data-price="' + pk + '">—</td>';
+        } else {
+          // 背景强度：|r| 越大越深；涨红跌绿
+          var alpha = Math.min(Math.abs(r), 1) * 0.42 + 0.08;
+          var base = r >= 0 ? "217,54,54" : "20,154,90";
+          html += '<td data-bal="' + bk + '" data-price="' + pk + '" class="' + cls(r) +
+            '" style="background:rgba(' + base + ',' + alpha.toFixed(2) + ')">' + r.toFixed(3) + '</td>';
+        }
+      });
+      html += "</tr>";
+    });
+    html += "</tbody></table>";
+    box.innerHTML = html;
+
+    // 点击切换上方自由对照图
+    box.querySelectorAll("td[data-bal]").forEach(function (td) {
+      td.addEventListener("click", function () {
+        if (td.classList.contains("na")) return;
+        FREE.bal = td.dataset.bal;
+        FREE.price = td.dataset.price;
+        syncPickerButtons();
+        redrawFree();
+      });
+    });
+  }
+
+  // 重建「自由对照」相关图表（切换选择时调用，不动其它图）
+  function redrawFree() {
+    disposeByDom("c-pairfree");
+    chartFree();
+  }
+
+  // 只销毁某个 dom 上的实例，保留其它图表
+  function disposeByDom(domId) {
+    var dom = document.getElementById(domId);
+    if (!dom) return;
+    for (var i = charts.length - 1; i >= 0; i--) {
+      var c = charts[i];
+      var cd = null;
+      try { cd = c.getDom ? c.getDom() : null; } catch (e) { cd = null; }
+      if (cd === dom) {
+        try { c.dispose(); } catch (e) { /* noop */ }
+        charts.splice(i, 1);
+      }
+    }
+  }
+
+  // 同步分段按钮的 active 状态
+  function syncPickerButtons() {
+    var pw = document.getElementById("pk-price");
+    var bw = document.getElementById("pk-bal");
+    if (pw) [].forEach.call(pw.querySelectorAll("button"), function (btn) {
+      btn.classList.toggle("active", btn.dataset.k === FREE.price);
+    });
+    if (bw) [].forEach.call(bw.querySelectorAll("button"), function (btn) {
+      btn.classList.toggle("active", btn.dataset.k === FREE.bal);
+    });
+  }
+
+  // 构建分段选择器
+  function buildPicker() {
+    var pw = document.getElementById("pk-price");
+    var bw = document.getElementById("pk-bal");
+    if (pw) {
+      pw.innerHTML = PRICE_KEYS.map(function (k) {
+        return '<button data-k="' + k + '">' + PNAME[k] + "</button>";
+      }).join("");
+      pw.addEventListener("click", function (e) {
+        var btn = e.target.closest("button[data-k]");
+        if (!btn) return;
+        FREE.price = btn.dataset.k;
+        syncPickerButtons();
+        redrawFree();
+      });
+    }
+    if (bw) {
+      bw.innerHTML = BAL_KEYS.map(function (k) {
+        return '<button data-k="' + k + '">' + (k === "g4" ? "G4" : GNAME[k]) + "</button>";
+      }).join("");
+      bw.addEventListener("click", function (e) {
+        var btn = e.target.closest("button[data-k]");
+        if (!btn) return;
+        FREE.bal = btn.dataset.k;
+        syncPickerButtons();
+        redrawFree();
+      });
+    }
+    syncPickerButtons();
+  }
+
+  // 支持 URL hash 深链：index.html#price=copper&bal=cn
+  // 便于分享特定对照，也便于自动化截图验证。
+  function applyHash() {
+    var h = (location.hash || "").replace(/^#/, "");
+    if (!h) return;
+    var q = {};
+    h.split("&").forEach(function (kv) {
+      var i = kv.indexOf("=");
+      if (i > 0) q[kv.slice(0, i)] = decodeURIComponent(kv.slice(i + 1));
+    });
+    if (q.price && PRICE_KEYS.indexOf(q.price) >= 0) FREE.price = q.price;
+    if (q.bal && BAL_KEYS.indexOf(q.bal) >= 0) FREE.bal = q.bal;
+  }
+
+  // 把当前选择写回 hash（不产生历史记录）
+  function writeHash() {
+    try {
+      var s = "#price=" + FREE.price + "&bal=" + FREE.bal;
+      if (history.replaceState) history.replaceState(null, "", s);
+    } catch (e) { /* noop */ }
   }
 
   // 10. 相关性表
@@ -446,6 +654,10 @@
     chartPrices();
     chartPair("c-gold", "g4", "gold");
     chartPair("c-copper", "cn", "copper");
+    applyHash();
+    buildPicker();
+    chartFree();
+    renderCorrMatrix();
     renderCorr();
   }
 
@@ -467,17 +679,40 @@
       document.documentElement.setAttribute("data-theme", next);
       localStorage.setItem("cbdash-theme", next);
       updateThemeBtn();
-      if (DATA) buildAll();
+      if (DATA && window.echarts) buildAll();
     });
     window.addEventListener("resize", function () {
       charts.forEach(function (c) { c.resize(); });
     });
 
-    fetch("data/dashboard.json", { cache: "no-store" })
-      .then(function (r) { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
-      .then(function (d) {
+    // ---- 1) 先确保 ECharts 就绪（index.html 里已做本地+多CDN兜底加载）----
+    var echartsReady = new Promise(function (resolve) {
+      if (window.echarts) return resolve();
+      // 已加载完成但 echarts 缺失（全部失败）的情况，事件会立即派发
+      window.addEventListener("echarts-ready", function () { resolve(); });
+    });
+
+    // ---- 2) 再取数据 ----
+    var dataReady = fetch("data/dashboard.json", { cache: "no-store" })
+      .then(function (r) { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); });
+
+    // ---- 3) 两者都就绪后才渲染（避免 echarts 未定义时抛错）----
+    Promise.all([echartsReady, dataReady])
+      .then(function (res) {
+        var d = res[1];
         DATA = d;
         renderHeaderMeta();
+        if (!window.echarts) {
+          // ECharts 实在加载不出来：仍展示 KPI 与相关性表等非图表内容
+          document.getElementById("loading").innerHTML =
+            '<div style="color:var(--up)">图表库（ECharts）加载失败，图表无法渲染。' +
+            '<br><span style="color:var(--text-3);font-size:13px">已改用本地 assets/vendor/echarts.min.js，请确认该文件存在；' +
+            'KPI 与相关性数据仍可正常查看。</span></div>';
+          renderKpis();
+          renderCorrMatrix();
+          renderCorr();
+          return;
+        }
         buildAll();
         document.getElementById("loading").style.display = "none";
       })
