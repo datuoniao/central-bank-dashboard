@@ -22,11 +22,16 @@ import io
 import re
 import time
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
 BASE = "http://www.pbc.gov.cn"
 YEAR_INDEX = BASE + "/diaochatongjisi/116219/116319/{y}ntjsj/hbtjgl/index.html"
 M2_INDEX = BASE + "/diaochatongjisi/116219/116225/index.html"
+
+# 并发度：GitHub Actions runner 在境外访问 pbc.gov.cn 延迟高，并发能显著缩短总耗时。
+# 注意不要太高，避免被源站限流。
+MAX_WORKERS = 6
 
 # 已知年份页 slug（规则页 2026 → '2026ntjsj'；更早年份为纯数字）
 YEAR_SLUGS = {
@@ -119,67 +124,76 @@ def _read_matrix(blob, is_xls):
     return [tuple(sh.row_values(r)) for r in range(sh.nrows)]
 
 
-def fetch_balance(years=None):
+def _fetch_one_year_balance(y):
+    """抓单年资产负债表，返回 { 'YYYY-MM': 总资产(亿元) }（失败返回空 dict）。"""
+    out = {}
+    slug = _find_year_slug(y)
+    if not slug:
+        print(f"  [pboc] {y} 年 slug 未找到，跳过")
+        return out
+    try:
+        xurl = _pick_balance_xlsx(slug)
+        if not xurl:
+            print(f"  [pboc] {y} 年资产负债表附件未找到，跳过")
+            return out
+        is_xls = xurl.lower().endswith(".xls") and not xurl.lower().endswith(".xlsx")
+        blob = _get(xurl, binary=True)
+        rows = _read_matrix(blob, is_xls)
+
+        # 表头行：含 '项目' 的那一行
+        hdr_i = None
+        for i, r in enumerate(rows):
+            if r and r[0] and "项目" in str(r[0]):
+                hdr_i = i
+                break
+        if hdr_i is None:
+            print(f"  [pboc] {y} 年表头未识别，跳过")
+            return out
+        hdr = rows[hdr_i]
+        colmap = {}
+        for ci, v in enumerate(hdr):
+            if ci == 0 or v is None:
+                continue
+            m = re.match(r"^(\d{4})[.\-/](\d{1,2})$", str(v).strip())
+            if m:
+                colmap[ci] = (int(m.group(1)), int(m.group(2)))
+
+        tot = None
+        for r in rows[hdr_i + 1:]:
+            if r and r[0] and re.sub(r"\s+", "", str(r[0])).startswith("总资产"):
+                tot = r
+                break
+        if tot is None:
+            print(f"  [pboc] {y} 年总资产行未找到，跳过")
+            return out
+
+        for ci, (yy, mm) in colmap.items():
+            val = tot[ci] if ci < len(tot) else None
+            if isinstance(val, (int, float)):
+                out[f"{yy:04d}-{mm:02d}"] = float(val)
+        print(f"  [pboc] {y} 年资产负债表: {sum(1 for (yy,_) in colmap.values() if yy==y)} 个月")
+    except Exception as e:  # noqa: BLE001
+        print(f"  [pboc] {y} 年资产负债表抓取失败: {type(e).__name__} {e}")
+    return out
+
+
+def fetch_balance(years=None, max_workers=MAX_WORKERS):
     """
     返回 { 'YYYY-MM': 总资产(亿元人民币) }
     years: 要抓的年份列表；默认抓内置 YEAR_SLUGS 的全部年份。
+    并发抓取以缩短境外访问耗时。
     """
     if years is None:
         years = sorted(YEAR_SLUGS)
 
     out = {}
-    for y in years:
-        slug = _find_year_slug(y)
-        if not slug:
-            print(f"  [pboc] {y} 年 slug 未找到，跳过")
-            continue
-        try:
-            xurl = _pick_balance_xlsx(slug)
-            if not xurl:
-                print(f"  [pboc] {y} 年资产负债表附件未找到，跳过")
-                continue
-            is_xls = xurl.lower().endswith(".xls") and not xurl.lower().endswith(".xlsx")
-            blob = _get(xurl, binary=True)
-            rows = _read_matrix(blob, is_xls)
-
-            # 表头行：含 '项目' 的那一行
-            hdr_i = None
-            for i, r in enumerate(rows):
-                if r and r[0] and "项目" in str(r[0]):
-                    hdr_i = i
-                    break
-            if hdr_i is None:
-                print(f"  [pboc] {y} 年表头未识别，跳过")
-                continue
-            hdr = rows[hdr_i]
-            # 列 -> (year, month)
-            colmap = {}
-            for ci, v in enumerate(hdr):
-                if ci == 0 or v is None:
-                    continue
-                s = str(v).strip()
-                m = re.match(r"^(\d{4})[.\-/](\d{1,2})$", s)
-                if m:
-                    colmap[ci] = (int(m.group(1)), int(m.group(2)))
-
-            # 总资产行
-            tot = None
-            for r in rows[hdr_i + 1:]:
-                if r and r[0] and re.sub(r"\s+", "", str(r[0])).startswith("总资产"):
-                    tot = r
-                    break
-            if tot is None:
-                print(f"  [pboc] {y} 年总资产行未找到，跳过")
-                continue
-
-            for ci, (yy, mm) in colmap.items():
-                val = tot[ci] if ci < len(tot) else None
-                if isinstance(val, (int, float)):
-                    out[f"{yy:04d}-{mm:02d}"] = float(val)
-            got = sum(1 for (yy, _) in colmap.values() if yy == y)
-            print(f"  [pboc] {y} 年资产负债表: {got} 个月")
-        except Exception as e:  # noqa: BLE001
-            print(f"  [pboc] {y} 年资产负债表抓取失败: {type(e).__name__} {e}")
+    with ThreadPoolExecutor(max_workers=max_workers) as ex:
+        futs = {ex.submit(_fetch_one_year_balance, y): y for y in years}
+        for f in as_completed(futs):
+            try:
+                out.update(f.result())
+            except Exception as e:  # noqa: BLE001
+                print(f"  [pboc] {futs[f]} 年异常: {type(e).__name__} {e}")
     return out
 
 
@@ -220,62 +234,75 @@ def _pick_m2_xlsx(stat_url):
     return BASE + m.group(1) if m else None
 
 
-def fetch_m2_table(years=None):
+def _fetch_one_year_m2(y):
+    """抓单年「货币供应量」表，返回 { 'YYYY-MM': M2(亿元) }（失败返回空 dict）。"""
+    out = {}
+    slug = _find_year_slug(y)
+    if not slug:
+        return out
+    try:
+        stat_url = _stat_url_of(slug)
+        if not stat_url:
+            return out
+        xurl = _pick_m2_xlsx(stat_url)
+        if not xurl:
+            print(f"  [pboc] {y} 年货币供应量表未找到")
+            return out
+        is_xls = xurl.lower().endswith(".xls") and not xurl.lower().endswith(".xlsx")
+        rows = _read_matrix(_get(xurl, binary=True), is_xls)
+
+        hdr_i = None
+        for i, r in enumerate(rows):
+            if r and r[0] and "项目" in str(r[0]):
+                hdr_i = i
+                break
+        if hdr_i is None:
+            return out
+        hdr = rows[hdr_i]
+        colmap = {}
+        for ci, v in enumerate(hdr):
+            if v is None:
+                continue
+            m = re.match(r"^(\d{4})[.\-/](\d{1,2})$", str(v).strip())
+            if m:
+                colmap[ci] = (int(m.group(1)), int(m.group(2)))
+
+        row = None
+        for r in rows[hdr_i + 1:]:
+            joined = " ".join(str(x) for x in r if x is not None)
+            if "M2" in joined and ("准货币" in joined or "Money" in joined):
+                row = r
+                break
+        if row is None:
+            return out
+        for ci, (yy, mm) in colmap.items():
+            val = row[ci] if ci < len(row) else None
+            if isinstance(val, (int, float)):
+                out[f"{yy:04d}-{mm:02d}"] = float(val)
+        print(f"  [pboc] {y} 年货币供应量: {sum(1 for (yy,_) in colmap.values() if yy==y)} 个月")
+    except Exception as e:  # noqa: BLE001
+        print(f"  [pboc] {y} 年货币供应量失败: {type(e).__name__} {e}")
+    return out
+
+
+def fetch_m2_table(years=None, max_workers=MAX_WORKERS):
     """
     从「货币供应量 Money Supply」表抓精确 M2（亿元）。
     布局：第 6 行 = 表头（'项目 Item' 在 A 列，月份从 D 列起），
           '货币和准货币（M2）' 行给出各月 M2。
     返回 { 'YYYY-MM': M2(亿元) }
+    并发抓取以缩短境外访问耗时。
     """
     if years is None:
         years = sorted(YEAR_SLUGS)
     out = {}
-    for y in years:
-        slug = _find_year_slug(y)
-        if not slug:
-            continue
-        try:
-            stat_url = _stat_url_of(slug)
-            if not stat_url:
-                continue
-            xurl = _pick_m2_xlsx(stat_url)
-            if not xurl:
-                print(f"  [pboc] {y} 年货币供应量表未找到")
-                continue
-            is_xls = xurl.lower().endswith(".xls") and not xurl.lower().endswith(".xlsx")
-            rows = _read_matrix(_get(xurl, binary=True), is_xls)
-
-            hdr_i = None
-            for i, r in enumerate(rows):
-                if r and r[0] and "项目" in str(r[0]):
-                    hdr_i = i
-                    break
-            if hdr_i is None:
-                continue
-            hdr = rows[hdr_i]
-            colmap = {}
-            for ci, v in enumerate(hdr):
-                if v is None:
-                    continue
-                m = re.match(r"^(\d{4})[.\-/](\d{1,2})$", str(v).strip())
-                if m:
-                    colmap[ci] = (int(m.group(1)), int(m.group(2)))
-
-            row = None
-            for r in rows[hdr_i + 1:]:
-                joined = " ".join(str(x) for x in r if x is not None)
-                if "M2" in joined and ("准货币" in joined or "Money" in joined):
-                    row = r
-                    break
-            if row is None:
-                continue
-            for ci, (yy, mm) in colmap.items():
-                val = row[ci] if ci < len(row) else None
-                if isinstance(val, (int, float)):
-                    out[f"{yy:04d}-{mm:02d}"] = float(val)
-            print(f"  [pboc] {y} 年货币供应量: {sum(1 for (yy,_) in colmap.values() if yy==y)} 个月")
-        except Exception as e:  # noqa: BLE001
-            print(f"  [pboc] {y} 年货币供应量失败: {type(e).__name__} {e}")
+    with ThreadPoolExecutor(max_workers=max_workers) as ex:
+        futs = {ex.submit(_fetch_one_year_m2, y): y for y in years}
+        for f in as_completed(futs):
+            try:
+                out.update(f.result())
+            except Exception as e:  # noqa: BLE001
+                print(f"  [pboc] {futs[f]} 年货币供应量异常: {type(e).__name__} {e}")
     return out
 
 
